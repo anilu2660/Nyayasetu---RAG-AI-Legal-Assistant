@@ -1,0 +1,58 @@
+{
+  "users": [
+    {
+      "id": "49a06e79-de20-4442-8f68-8efce6dfe274",
+      "email": "upadhyayanuj526@gmail.com",
+      "name": "Anuj",
+      "password": "Anujup2660@",
+      "createdAt": "2026-06-11T10:10:54.409Z"
+    }
+  ],
+  "chats": [
+    {
+      "id": "a8099bcc-0307-435d-8c78-315a13b6ef34",
+      "userId": "49a06e79-de20-4442-8f68-8efce6dfe274",
+      "title": "Legal Query 1",
+      "createdAt": "2026-06-11T10:53:37.251Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": "03ed5d60-fe0c-4fac-853e-cbb9445cec9a",
+      "chatId": "a8099bcc-0307-435d-8c78-315a13b6ef34",
+      "role": "user",
+      "content": "hello",
+      "timestamp": "2026-06-11T10:53:58.379Z"
+    },
+    {
+      "id": "0a58de46-1440-4ce3-890c-bf792828efee",
+      "chatId": "a8099bcc-0307-435d-8c78-315a13b6ef34",
+      "role": "assistant",
+      "content": "Hello! Namaste. I am NyayaSetu, your AI legal assistant. How can I help you with Indian legal matters or documents today?",
+      "timestamp": "2026-06-11T10:53:59.197Z"
+    },
+    {
+      "id": "d98ef616-fe23-41fd-bf52-bb1528c7f669",
+      "chatId": "a8099bcc-0307-435d-8c78-315a13b6ef34",
+      "role": "user",
+      "content": "clear",
+      "timestamp": "2026-06-11T10:54:07.656Z"
+    },
+    {
+      "id": "2d9b0a04-db75-437d-996b-ff435bdb36bb",
+      "chatId": "a8099bcc-0307-435d-8c78-315a13b6ef34",
+      "role": "assistant",
+      "content": "### Overview\n\nI couldn't find specific section details in my database for \"clear\". I will provide standard legal guidance. In India, legal matters are handled under the Bharatiya Nyaya Sanhita (BNS) and civil procedure codes based on the issue category.\n\n### Relevant Legal Provisions\n\n- **Source Document**: Constitution of India, Bharatiya Nyaya Sanhita (BNS), or specific central acts.\n- Refer to sections governing rights and filing processes.\n\n### What You Can Do\n\n1. File an application/complaint at the relevant forum (e.g., Police Station or Consumer Forum).\n2. Consult the District Legal Services Authority (DLSA) for free legal aid if eligible.\n3. Draft a legal notice to the counter-party.\n\n### Important Note\n\n> **Disclaimer**: This information is intended for educational and informational purposes only and should not be considered a substitute for professional legal advice. Always consult a licensed advocate for critical legal decisions.",
+      "timestamp": "2026-06-11T10:54:10.487Z"
+    }
+  ],
+  "documents": [],
+  "settings": [
+    {
+      "userId": "49a06e79-de20-4442-8f68-8efce6dfe274",
+      "theme": "light",
+      "fontSize": "large",
+      "language": "en"
+    }
+  ]
+}

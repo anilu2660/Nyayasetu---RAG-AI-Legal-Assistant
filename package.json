@@ -1,0 +1,16 @@
+{
+  "name": "nyayasetu-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:frontend": "npm run dev -w frontend",
+    "build:frontend": "npm run build -w frontend",
+    "start:frontend": "npm run start -w frontend",
+    "build:backend": "npm run build -w backend",
+    "install:all": "npm install"
+  },
+  "workspaces": [
+    "frontend",
+    "backend"
+  ]
+}
