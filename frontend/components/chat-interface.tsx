@@ -6,6 +6,7 @@ import {
   ArrowUp, Copy, Check, RotateCw,
   ThumbsUp, ThumbsDown, Menu, Sparkles,
   Info, Mic, Paperclip, Square, Loader2, X, FileText,
+  Volume2, VolumeX,
 } from 'lucide-react';
 import gsap from 'gsap';
 
@@ -80,7 +81,7 @@ function getFollowUps(content: string): string[] {
 
 /* ══════════════════════════════════════════════
    MAIN COMPONENT
-══════════════════════════════════════════════ */
+   ══════════════════════════════════════════════ */
 export default function ChatInterface() {
   const {
     activeChatId, messages, isLoadingResponse,
@@ -89,7 +90,30 @@ export default function ChatInterface() {
     setLoadingResponse, setMessages,
     fontSize, theme, addDocumentStore,
     chats, setChats,
+    setActiveChatId, addChat,
+    setUser,
   } = useStore();
+
+  // Guest Trial Session timer check (10 minutes)
+  useEffect(() => {
+    const checkTrial = () => {
+      if (typeof window !== 'undefined') {
+        const trialStart = localStorage.getItem('nyayasetu_guest_trial_start');
+        if (trialStart) {
+          const elapsed = Date.now() - Number(trialStart);
+          const limit = 10 * 60 * 1000; // 10 minutes
+          if (elapsed >= limit) {
+            localStorage.removeItem('nyayasetu_guest_trial_start');
+            setUser(null);
+            window.location.href = '/?trialExpired=true';
+          }
+        }
+      }
+    };
+    checkTrial();
+    const interval = setInterval(checkTrial, 5000);
+    return () => clearInterval(interval);
+  }, [setUser]);
 
   const [input,     setInput]     = useState('');
   const [copiedId,  setCopiedId]  = useState<string | null>(null);
@@ -97,13 +121,56 @@ export default function ChatInterface() {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [pendingFile, setPendingFile] = useState<{ id?: string; name: string; type: string; isUploading: boolean } | null>(null);
   const fileInputRef   = useRef<HTMLInputElement>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messageContainerRef = useRef<HTMLDivElement>(null);
   const inputRef       = useRef<HTMLTextAreaElement>(null);
   const headerRef      = useRef<HTMLDivElement>(null);
   const inputAreaRef   = useRef<HTMLDivElement>(null);
 
-  /* Auto scroll */
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isLoadingResponse]);
+  /* Voice recording & transcription state & refs */
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [currentlySpeakingId, setCurrentlySpeakingId] = useState<string | null>(null);
+  const [isVoiceOutputEnabled, setIsVoiceOutputEnabled] = useState(false);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const audioElementRef = useRef<HTMLAudioElement | null>(null);
+
+  const speechQueueRef = useRef<string[]>([]);
+  const isSpeakingQueueActiveRef = useRef(false);
+  const spokenTextLengthRef = useRef(0);
+  const isVoiceOutputCancelledRef = useRef(false);
+
+  // Load voice output setting on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('isVoiceOutputEnabled');
+      if (saved !== null) {
+        setIsVoiceOutputEnabled(saved === 'true');
+      }
+    }
+  }, []);
+
+  const toggleVoiceOutput = () => {
+    const newVal = !isVoiceOutputEnabled;
+    setIsVoiceOutputEnabled(newVal);
+    localStorage.setItem('isVoiceOutputEnabled', String(newVal));
+    if (!newVal) {
+      stopSpeaking();
+    }
+  };
+
+  /* Auto scroll using GSAP for a premium, smooth deceleration curve */
+  useEffect(() => {
+    if (messageContainerRef.current) {
+      gsap.to(messageContainerRef.current, {
+        scrollTop: messageContainerRef.current.scrollHeight,
+        duration: 0.6,
+        ease: 'power3.out',
+        overwrite: 'auto'
+      });
+    }
+  }, [messages, isLoadingResponse]);
 
   /* Auto resize textarea */
   useEffect(() => {
@@ -113,21 +180,394 @@ export default function ChatInterface() {
     }
   }, [input]);
 
-  /* GSAP header and input entrance */
+  /* GSAP entrance animations */
   useLayoutEffect(() => {
     const tl = gsap.timeline();
     if (headerRef.current)   tl.fromTo(headerRef.current,   { y: -20, opacity: 0 }, { y: 0, opacity: 1, duration: 0.4, ease: 'power3.out' });
     if (inputAreaRef.current) tl.fromTo(inputAreaRef.current, { y: 20, opacity: 0 },  { y: 0, opacity: 1, duration: 0.4, ease: 'power3.out' }, '-=0.2');
   }, []);
 
-  /* Animate new messages */
+  /* GSAP Welcome screen animation using word staggers and 3D rotation */
+  useLayoutEffect(() => {
+    if (!activeChatId) {
+      const tl = gsap.timeline();
+      tl.fromTo('.welcome-logo', { scale: 0, rotate: -30, opacity: 0 }, { scale: 1, rotate: 0, opacity: 1, duration: 0.65, ease: 'back.out(1.7)' });
+      tl.fromTo('.welcome-word', 
+        { opacity: 0, y: 30, rotateX: -45, transformOrigin: '50% 50% -20px' }, 
+        { opacity: 1, y: 0, rotateX: 0, duration: 0.6, stagger: 0.05, ease: 'power3.out' }, 
+        '-=0.35'
+      );
+      tl.fromTo('.welcome-desc', { opacity: 0, y: 15 }, { opacity: 1, y: 0, duration: 0.4, ease: 'power3.out' }, '-=0.35');
+      tl.fromTo('.welcome-starter', { opacity: 0, y: 20, scale: 0.96 }, { opacity: 1, y: 0, scale: 1, duration: 0.5, stagger: 0.08, ease: 'power3.out' }, '-=0.25');
+    }
+  }, [activeChatId]);
+
+  /* Animate new messages with staggered avatars and body bubbles */
   useEffect(() => {
     const msgs = document.querySelectorAll('.msg-item:not(.animated)');
     msgs.forEach(el => {
       el.classList.add('animated');
-      gsap.fromTo(el, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' });
+      
+      const avatar = el.querySelector('.msg-avatar');
+      const body = el.querySelector('.msg-body');
+      
+      const tl = gsap.timeline();
+      tl.fromTo(el, { opacity: 0, y: 15 }, { opacity: 1, y: 0, duration: 0.4, ease: 'power3.out' });
+      if (avatar) {
+        tl.fromTo(avatar, { scale: 0, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.3, ease: 'back.out(1.5)' }, '-=0.3');
+      }
+      if (body) {
+        tl.fromTo(body, { opacity: 0, x: el.classList.contains('ai-msg') ? -12 : 12 }, { opacity: 1, x: 0, duration: 0.35, ease: 'power2.out' }, '-=0.25');
+      }
     });
   }, [messages]);
+
+  /* Animate followup buttons when they appear */
+  useEffect(() => {
+    if (!isLoadingResponse) {
+      const btns = document.querySelectorAll('.followup-btn:not(.animated)');
+      if (btns.length > 0) {
+        btns.forEach(b => b.classList.add('animated'));
+        gsap.fromTo(btns,
+          { opacity: 0, y: 10, scale: 0.95 },
+          { opacity: 1, y: 0, scale: 1, duration: 0.4, stagger: 0.06, ease: 'back.out(1.2)', delay: 0.1 }
+        );
+      }
+    }
+  }, [messages, isLoadingResponse]);
+
+  /* GSAP starter hover animations */
+  const handleStarterMouseEnter = (e: React.MouseEvent<HTMLButtonElement>) => {
+    gsap.to(e.currentTarget, {
+      y: -5,
+      scale: 1.02,
+      backgroundColor: theme === 'dark' ? 'rgba(124, 106, 247, 0.08)' : 'rgba(124, 106, 247, 0.04)',
+      borderColor: 'rgba(124, 106, 247, 0.35)',
+      boxShadow: theme === 'dark' 
+        ? '0 10px 25px rgba(124, 106, 247, 0.15), 0 0 0 1px rgba(124, 106, 247, 0.2)' 
+        : '0 10px 25px rgba(124, 106, 247, 0.08), 0 0 0 1px rgba(124, 106, 247, 0.1)',
+      duration: 0.3,
+      ease: 'power2.out',
+      overwrite: 'auto'
+    });
+    const icon = e.currentTarget.querySelector('.starter-icon');
+    if (icon) {
+      gsap.to(icon, { scale: 1.25, rotate: 8, duration: 0.3, ease: 'back.out(1.5)', overwrite: 'auto' });
+    }
+  };
+
+  const handleStarterMouseLeave = (e: React.MouseEvent<HTMLButtonElement>) => {
+    gsap.to(e.currentTarget, {
+      y: 0,
+      scale: 1,
+      backgroundColor: 'var(--secondary)',
+      borderColor: 'var(--border)',
+      boxShadow: 'none',
+      duration: 0.3,
+      ease: 'power2.out',
+      overwrite: 'auto'
+    });
+    const icon = e.currentTarget.querySelector('.starter-icon');
+    if (icon) {
+      gsap.to(icon, { scale: 1, rotate: 0, duration: 0.3, ease: 'power2.out', overwrite: 'auto' });
+    }
+  };
+
+  /* GSAP input container focus animations */
+  const handleInputFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    gsap.to(e.currentTarget, {
+      borderColor: 'rgba(124, 106, 247, 0.5)',
+      boxShadow: theme === 'dark'
+        ? '0 0 0 3px rgba(124, 106, 247, 0.12), 0 8px 32px rgba(124, 106, 247, 0.08)'
+        : '0 0 0 3px rgba(124, 106, 247, 0.08), 0 8px 32px rgba(124, 106, 247, 0.04)',
+      y: -1,
+      duration: 0.35,
+      ease: 'power2.out',
+      overwrite: 'auto'
+    });
+  };
+
+  const handleInputBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    gsap.to(e.currentTarget, {
+      borderColor: 'var(--border)',
+      boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
+      y: 0,
+      duration: 0.35,
+      ease: 'power2.out',
+      overwrite: 'auto'
+    });
+  };
+
+  /* Audio Recording functions (STT Whisper) */
+  const startRecording = async () => {
+    try {
+      if (!isVoiceOutputEnabled) {
+        setIsVoiceOutputEnabled(true);
+        localStorage.setItem('isVoiceOutputEnabled', 'true');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      
+      const options = { mimeType: 'audio/webm' };
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, options);
+      } catch (err) {
+        recorder = new MediaRecorder(stream);
+      }
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        stream.getTracks().forEach(track => track.stop());
+        if (audioBlob.size > 0) {
+          await transcribeAudio(audioBlob);
+        }
+      };
+
+      recorder.start(250);
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      setUploadError('Microphone access denied or audio device not found.');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+      if (mediaRecorderRef.current.stream) {
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+    }
+    setIsRecording(false);
+    audioChunksRef.current = [];
+  };
+
+  const transcribeAudio = async (audioBlob: Blob) => {
+    setIsTranscribing(true);
+    setUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', audioBlob, 'recording.webm');
+      
+      const res = await fetch('/api/voice', { method: 'POST', body: formData });
+      const data = await res.json();
+      
+      if (data.text) {
+        setInput(data.text);
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+        // Auto-send transcription text
+        handleSend(data.text);
+      } else {
+        setUploadError(data.error || 'Failed to transcribe audio.');
+      }
+    } catch (err) {
+      console.error('Transcription error:', err);
+      setUploadError('Network error transcribing voice.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  /* Audio Speak functions (TTS OpenAI / SpeechSynthesis) */
+  const cleanMarkdownForSpeak = (text: string) => {
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '$1')
+      .replace(/### (.*?)\n/g, '$1. ')
+      .replace(/## (.*?)\n/g, '$1. ')
+      .replace(/> (.*?)\n/g, '$1. ')
+      .replace(/[-*]\s/g, '')
+      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+      .trim();
+  };
+
+  const fallbackBrowserSpeak = (content: string) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    
+    const cleaned = cleanMarkdownForSpeak(content);
+    const utterance = new SpeechSynthesisUtterance(cleaned);
+    
+    utterance.onend = () => setCurrentlySpeakingId(null);
+    utterance.onerror = () => setCurrentlySpeakingId(null);
+
+    const voices = window.speechSynthesis.getVoices();
+    const indianVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-US'));
+    if (indianVoice) utterance.voice = indianVoice;
+    
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const fallbackBrowserSpeakChunk = (msgId: string, sentence: string) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      processSpeechQueue(msgId);
+      return;
+    }
+    
+    window.speechSynthesis.cancel();
+    
+    const cleaned = cleanMarkdownForSpeak(sentence);
+    const utterance = new SpeechSynthesisUtterance(cleaned);
+    
+    utterance.onend = () => {
+      processSpeechQueue(msgId);
+    };
+    utterance.onerror = () => {
+      processSpeechQueue(msgId);
+    };
+    
+    const voices = window.speechSynthesis.getVoices();
+    const indianVoice = voices.find(v => v.lang.includes('en-IN') || v.lang.includes('en-US'));
+    if (indianVoice) utterance.voice = indianVoice;
+    
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const enqueueSentence = (msgId: string, sentence: string) => {
+    speechQueueRef.current.push(sentence);
+    if (!isSpeakingQueueActiveRef.current) {
+      processSpeechQueue(msgId);
+    }
+  };
+
+  const processSpeechQueue = async (msgId: string) => {
+    if (speechQueueRef.current.length === 0) {
+      isSpeakingQueueActiveRef.current = false;
+      setCurrentlySpeakingId(null);
+      return;
+    }
+    
+    isSpeakingQueueActiveRef.current = true;
+    setCurrentlySpeakingId(msgId);
+    
+    const nextSentence = speechQueueRef.current.shift()!;
+    
+    try {
+      const response = await fetch('/api/voice/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cleanMarkdownForSpeak(nextSentence), voice: 'alloy' })
+      });
+      
+      if (!response.ok) throw new Error('OpenAI TTS synthesis failed');
+      
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      const audio = new Audio(audioUrl);
+      audioElementRef.current = audio;
+      
+      audio.onended = () => {
+        audioElementRef.current = null;
+        processSpeechQueue(msgId);
+      };
+      
+      audio.onerror = () => {
+        audioElementRef.current = null;
+        console.warn('Playback error on queue chunk, trying fallback');
+        fallbackBrowserSpeakChunk(msgId, nextSentence);
+      };
+      
+      await audio.play();
+    } catch (err) {
+      console.warn('OpenAI TTS failed on chunk, using browser SpeechSynthesis fallback:', err);
+      fallbackBrowserSpeakChunk(msgId, nextSentence);
+    }
+  };
+
+  const enqueueNewSentences = (msgId: string, fullText: string) => {
+    const textSegment = fullText.substring(spokenTextLengthRef.current);
+    
+    let searchPos = 0;
+    const regex = /([.?!](?:\s+|$))|(\n+)/g;
+    let match;
+    
+    while ((match = regex.exec(textSegment)) !== null) {
+      const matchEnd = regex.lastIndex;
+      const sentenceContent = textSegment.substring(searchPos, matchEnd).trim();
+      
+      const words = sentenceContent.replace(/[.?!]$/, '').trim().split(/\s+/);
+      const lastWord = words[words.length - 1]?.toLowerCase() || '';
+      const isAbbr = /^(sec|art|eg|ie|vs|dr|mr|mrs|bns|ipc|crpc|bsa|no)$/.test(lastWord);
+      
+      if (isAbbr) {
+        continue;
+      }
+      
+      if (sentenceContent) {
+        enqueueSentence(msgId, sentenceContent);
+      }
+      
+      spokenTextLengthRef.current += matchEnd - searchPos;
+      searchPos = matchEnd;
+      regex.lastIndex = searchPos;
+    }
+  };
+
+  const handleSpeakResponse = async (msgId: string, content: string) => {
+    if (currentlySpeakingId === msgId) {
+      stopSpeaking();
+      return;
+    }
+    stopSpeaking();
+    
+    isVoiceOutputCancelledRef.current = false;
+    setCurrentlySpeakingId(msgId);
+    spokenTextLengthRef.current = 0;
+    speechQueueRef.current = [];
+    
+    enqueueNewSentences(msgId, content);
+    
+    if (spokenTextLengthRef.current < content.length) {
+      const remaining = content.substring(spokenTextLengthRef.current).trim();
+      if (remaining) {
+        enqueueSentence(msgId, remaining);
+      }
+    }
+  };
+
+  const stopSpeaking = () => {
+    isVoiceOutputCancelledRef.current = true;
+    if (audioElementRef.current) {
+      audioElementRef.current.pause();
+      audioElementRef.current = null;
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    speechQueueRef.current = [];
+    isSpeakingQueueActiveRef.current = false;
+    setCurrentlySpeakingId(null);
+  };
+
+  // Clean speaker audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioElementRef.current) {
+        audioElementRef.current.pause();
+      }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -172,7 +612,51 @@ export default function ChatInterface() {
 
   /* ── Handlers ── */
   const handleSend = async (text: string) => {
-    if ((!text.trim() && !pendingFile) || !activeChatId || isLoadingResponse) return;
+    if (typeof window !== 'undefined') {
+      const trialStart = localStorage.getItem('nyayasetu_guest_trial_start');
+      if (trialStart) {
+        const elapsed = Date.now() - Number(trialStart);
+        if (elapsed >= 10 * 60 * 1000) {
+          localStorage.removeItem('nyayasetu_guest_trial_start');
+          setUser(null);
+          window.location.href = '/?trialExpired=true';
+          return;
+        }
+      }
+    }
+
+    if ((!text.trim() && !pendingFile) || isLoadingResponse) return;
+
+    let currentChatId = activeChatId;
+
+    // Automatically create a new chat session if none is active
+    if (!currentChatId) {
+      setLoadingResponse(true);
+      try {
+        const titleText = text.trim() ? (text.trim().substring(0, 30) + (text.trim().length > 30 ? '...' : '')) : `Legal Query ${chats.length + 1}`;
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'create', title: titleText }),
+        });
+        const data = await res.json();
+        if (data.chat) {
+          addChat(data.chat);
+          setActiveChatId(data.chat.id);
+          currentChatId = data.chat.id;
+          setMessages([]);
+        } else {
+          setLoadingResponse(false);
+          return;
+        }
+      } catch (err) {
+        console.error('Failed to create automatic chat:', err);
+        setLoadingResponse(false);
+        return;
+      }
+    }
+
+    if (!currentChatId) return;
 
     const docName = pendingFile && !pendingFile.isUploading ? pendingFile.name : undefined;
     const docType = pendingFile && !pendingFile.isUploading ? pendingFile.type : undefined;
@@ -190,7 +674,7 @@ export default function ChatInterface() {
 
     const userMsg: Message = { 
       id: Math.random().toString(), 
-      chatId: activeChatId, 
+      chatId: currentChatId, 
       role: 'user', 
       content: finalMsgText, 
       timestamp: new Date().toISOString(),
@@ -200,7 +684,7 @@ export default function ChatInterface() {
     addMessage(userMsg);
 
     const aiId = Math.random().toString();
-    addMessage({ id: aiId, chatId: activeChatId, role: 'assistant', content: '', timestamp: new Date().toISOString() });
+    addMessage({ id: aiId, chatId: currentChatId, role: 'assistant', content: '', timestamp: new Date().toISOString() });
 
     try {
       const res = await fetch('/api/chat', { 
@@ -208,7 +692,7 @@ export default function ChatInterface() {
         headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ 
           action: 'send', 
-          chatId: activeChatId, 
+          chatId: currentChatId, 
           message: finalMsgText,
           documentName: docName,
           documentType: docType
@@ -217,7 +701,7 @@ export default function ChatInterface() {
       if (!res.body) throw new Error('No stream');
 
       // Re-fetch chat list asynchronously if it is the first message to update the sidebar title
-      if (isFirstMsg) {
+      if (isFirstMsg || messages.length === 0) {
         fetch('/api/chat')
           .then(r => r.json())
           .then(data => {
@@ -225,6 +709,10 @@ export default function ChatInterface() {
           })
           .catch(() => {});
       }
+
+      isVoiceOutputCancelledRef.current = false;
+      spokenTextLengthRef.current = 0;
+      speechQueueRef.current = [];
 
       const reader  = res.body.getReader();
       const decoder = new TextDecoder();
@@ -234,10 +722,23 @@ export default function ChatInterface() {
         done = d;
         acc += decoder.decode(value, { stream: !done });
         useStore.setState(s => ({ messages: s.messages.map(m => m.id === aiId ? { ...m, content: acc } : m) }));
+        
+        if (isVoiceOutputEnabled && !isVoiceOutputCancelledRef.current) {
+          enqueueNewSentences(aiId, acc);
+        }
       }
-      const final = await fetch(`/api/chat?chatId=${activeChatId}`);
+      const final = await fetch(`/api/chat?chatId=${currentChatId}`);
       const data  = await final.json();
-      if (data.messages) setMessages(data.messages);
+      if (data.messages) {
+        setMessages(data.messages);
+        
+        if (isVoiceOutputEnabled && !isVoiceOutputCancelledRef.current && spokenTextLengthRef.current < acc.length) {
+          const remaining = acc.substring(spokenTextLengthRef.current).trim();
+          if (remaining) {
+            enqueueSentence(aiId, remaining);
+          }
+        }
+      }
     } catch {
       useStore.setState(s => ({ messages: s.messages.map(m => m.id === aiId ? { ...m, content: 'Sorry, I encountered an issue. Please try again.' } : m) }));
     } finally { setLoadingResponse(false); }
@@ -272,7 +773,18 @@ export default function ChatInterface() {
   });
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--background)', overflow: 'hidden', position: 'relative' }}>
+    <div className="hero-mesh noise" style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', position: 'relative' }}>
+      
+      {/* Shadcn UI dot-grid background layer with mask */}
+      <div className="dot-grid" style={{ 
+        position: 'absolute', 
+        inset: 0, 
+        pointerEvents: 'none', 
+        opacity: 0.5, 
+        zIndex: 0,
+        WebkitMaskImage: 'radial-gradient(circle at center, rgba(0,0,0,1) 30%, rgba(0,0,0,0) 80%)',
+        maskImage: 'radial-gradient(circle at center, rgba(0,0,0,1) 30%, rgba(0,0,0,0) 80%)'
+      } as React.CSSProperties} />
 
       {/* ── Header ── */}
       <div ref={headerRef} style={{ height: 56, borderBottom: '1px solid var(--border)', background: theme === 'dark' ? 'rgba(17,17,24,0.85)' : 'rgba(255,255,255,0.85)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 20px', flexShrink: 0, position: 'relative', zIndex: 10 }}>
@@ -300,29 +812,43 @@ export default function ChatInterface() {
       </div>
 
       {/* ── Message area ── */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0' }}>
+      <div ref={messageContainerRef} style={{ flex: 1, overflowY: 'auto', padding: '24px 0', position: 'relative', zIndex: 1 }}>
         {!activeChatId ? (
           /* ── Welcome screen ── */
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 24px', maxWidth: 680, margin: '0 auto', gap: 32 }}>
-            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-              <div style={{ width: 60, height: 60, borderRadius: 20, background: 'linear-gradient(135deg,#7c6af7,#5b50d1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, boxShadow: '0 12px 32px rgba(124,106,247,0.4)' }}>⚖️</div>
-              <h1 style={{ fontSize: 'clamp(1.4rem,3vw,2.1rem)', fontWeight: 900, letterSpacing: '-0.04em', margin: 0, lineHeight: 1.1, color: 'var(--foreground)' }}>
-                How can I assist your<br />
-                <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c6af7,#f0a500)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>legal inquiry?</span>
+            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, perspective: 1000 }}>
+              <div className="welcome-logo" style={{ width: 60, height: 60, borderRadius: 20, background: 'linear-gradient(135deg,#7c6af7,#5b50d1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, boxShadow: '0 12px 32px rgba(124,106,247,0.4)' }}>⚖️</div>
+              
+              <h1 className="welcome-title" style={{ fontSize: 'clamp(1.4rem,3vw,2.1rem)', fontWeight: 900, letterSpacing: '-0.04em', margin: 0, lineHeight: 1.2, color: 'var(--foreground)' }}>
+                {"How can I assist your".split(" ").map((w, i) => (
+                  <span key={i} className="welcome-word" style={{ display: 'inline-block', marginRight: '8px' }}>{w}</span>
+                ))}
+                <br />
+                <span className="welcome-word" style={{ 
+                  display: 'inline-block',
+                  background: 'linear-gradient(135deg,#a78bfa,#7c6af7,#f0a500)', 
+                  WebkitBackgroundClip: 'text', 
+                  WebkitTextFillColor: 'transparent', 
+                  backgroundClip: 'text',
+                  marginTop: '4px'
+                }}>
+                  legal inquiry?
+                </span>
               </h1>
-              <p style={{ fontSize: 14, color: 'var(--muted-foreground)', maxWidth: 400, lineHeight: 1.7, margin: 0 }}>
+              
+              <p className="welcome-desc" style={{ fontSize: 14, color: 'var(--muted-foreground)', maxWidth: 400, lineHeight: 1.7, margin: 0 }}>
                 Ask about Indian laws, upload legal documents, or explore rights under BNS, BNSS, Constitution, and more.
               </p>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, width: '100%' }}>
               {STARTERS.map((p, i) => (
-                <button key={i} onClick={() => handleSend(p.text)}
-                  style={{ padding: '16px 18px', borderRadius: 14, background: 'var(--secondary)', border: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s', display: 'flex', flexDirection: 'column', gap: 6, minHeight: 90 }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,106,247,0.07)'; e.currentTarget.style.borderColor = 'rgba(124,106,247,0.25)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'var(--secondary)'; e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.transform = 'translateY(0)'; }}>
+                <button key={i} onClick={() => handleSend(p.text)} className="welcome-starter"
+                  onMouseEnter={handleStarterMouseEnter}
+                  onMouseLeave={handleStarterMouseLeave}
+                  style={{ padding: '16px 18px', borderRadius: 14, background: 'var(--secondary)', border: '1px solid var(--border)', cursor: 'pointer', textAlign: 'left', display: 'flex', flexDirection: 'column', gap: 6, minHeight: 90 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 16 }}>{p.icon}</span>
+                    <span className="starter-icon" style={{ fontSize: 16, display: 'inline-block' }}>{p.icon}</span>
                     <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{p.title}</span>
                   </div>
                   <p style={{ fontSize: 11, color: 'var(--muted-foreground)', margin: 0, lineHeight: 1.5, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>{p.text}</p>
@@ -339,101 +865,123 @@ export default function ChatInterface() {
           </div>
         ) : (
           /* ── Messages ── */
-          <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+          <div style={{ maxWidth: 760, margin: '0 auto', padding: '0 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
             {messages.map((msg, idx) => {
               const isAi = msg.role === 'assistant';
               const isTyping = !msg.content && isAi && isLoadingResponse && idx === messages.length - 1;
 
               return (
-                <div key={msg.id} className="msg-item" style={{ display: 'flex', gap: 14, padding: '18px 0', borderBottom: idx < messages.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <div key={msg.id} className={`msg-item ${isAi ? 'ai-msg' : 'user-msg'}`} style={{ 
+                  display: 'flex', 
+                  gap: 14, 
+                  padding: '8px 0',
+                  width: '100%',
+                  justifyContent: isAi ? 'flex-start' : 'flex-end',
+                }}>
 
-                  {/* Avatar */}
-                  <div style={{ flexShrink: 0, marginTop: 2 }}>
-                    {isAi ? (
+                  {/* Avatar (AI on Left) */}
+                  {isAi && (
+                    <div className="msg-avatar" style={{ flexShrink: 0, marginTop: 2 }}>
                       <div style={{ width: 30, height: 30, borderRadius: 10, background: 'linear-gradient(135deg,#7c6af7,#5b50d1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, boxShadow: '0 4px 12px rgba(124,106,247,0.35)' }}>⚖️</div>
-                    ) : (
-                      <div style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--secondary)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>
-                        {useStore.getState().user?.name?.charAt(0)?.toUpperCase() || 'U'}
-                      </div>
-                    )}
-                  </div>
+                    </div>
+                  )}
 
-                  {/* Content */}
-                  <div style={{ flex: 1, minWidth: 0 }}>
+                  {/* Message body */}
+                  <div className="msg-body" style={{ 
+                    maxWidth: '85%', 
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: isAi ? 'flex-start' : 'flex-end'
+                  }}>
                     {/* Name + time */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>{isAi ? 'NyayaSetu' : 'You'}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--foreground)' }}>{isAi ? 'NyayaSetu' : 'You'}</span>
                       <span style={{ fontSize: 10, color: 'var(--muted-foreground)' }}>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                     </div>
 
-                    {/* Message body */}
-                    {isTyping ? (
-                      <div style={{ display: 'flex', gap: 5, alignItems: 'center', padding: '12px 0' }}>
-                        {[0, 150, 300].map(d => (
-                          <span key={d} style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--muted-foreground)', display: 'inline-block', animation: 'dotBounce 1.2s infinite', animationDelay: `${d}ms` }} />
-                        ))}
-                      </div>
-                    ) : isAi ? (
-                      <div style={{ lineHeight: 1.7 }}>{renderContent(msg.content)}</div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        {msg.documentName && (
-                          <div style={{
-                            alignSelf: 'flex-start',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 12,
-                            padding: '10px 14px',
-                            background: 'rgba(255, 255, 255, 0.04)',
-                            border: '1px solid rgba(255, 255, 255, 0.08)',
-                            borderRadius: 12,
-                            minWidth: 220,
-                            maxWidth: 320,
-                            boxSizing: 'border-box'
-                          }}>
-                            {/* Red Icon Box */}
+                    {/* Message bubble card */}
+                    <div style={{
+                      width: '100%',
+                      background: isAi 
+                        ? (theme === 'dark' ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.85)')
+                        : (theme === 'dark' ? 'rgba(124,106,247,0.08)' : 'rgba(124,106,247,0.04)'),
+                      border: isAi
+                        ? '1px solid var(--border)'
+                        : '1px solid rgba(124,106,247,0.25)',
+                      borderRadius: isAi ? '0 16px 16px 16px' : '16px 0 16px 16px',
+                      padding: isAi ? '16px 20px' : '12px 16px',
+                      boxShadow: isAi ? '0 4px 20px rgba(0,0,0,0.05)' : 'none',
+                      backdropFilter: isAi ? 'blur(8px)' : 'none',
+                    }}>
+                      {isTyping ? (
+                        <div style={{ display: 'flex', gap: 5, alignItems: 'center', padding: '6px 0' }}>
+                          {[0, 150, 300].map(d => (
+                            <span key={d} style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--muted-foreground)', display: 'inline-block', animation: 'dotBounce 1.2s infinite', animationDelay: `${d}ms` }} />
+                          ))}
+                        </div>
+                      ) : isAi ? (
+                        <div style={{ lineHeight: 1.7 }}>{renderContent(msg.content)}</div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {msg.documentName && (
                             <div style={{
-                              width: 36,
-                              height: 36,
-                              borderRadius: 8,
-                              background: '#ef4444',
+                              alignSelf: 'flex-start',
                               display: 'flex',
                               alignItems: 'center',
-                              justifyContent: 'center',
-                              flexShrink: 0
+                              gap: 12,
+                              padding: '10px 14px',
+                              background: 'rgba(255, 255, 255, 0.04)',
+                              border: '1px solid rgba(255, 255, 255, 0.08)',
+                              borderRadius: 12,
+                              minWidth: 220,
+                              maxWidth: 320,
+                              boxSizing: 'border-box'
                             }}>
-                              <FileText size={18} style={{ color: '#ffffff' }} />
+                              {/* Red Icon Box */}
+                              <div style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: 8,
+                                background: '#ef4444',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                flexShrink: 0
+                              }}>
+                                <FileText size={18} style={{ color: '#ffffff' }} />
+                              </div>
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <p style={{ fontSize: 13, fontWeight: 700, margin: 0, color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={msg.documentName}>
+                                  {msg.documentName}
+                                </p>
+                                <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-foreground)', margin: 0, marginTop: 2, textTransform: 'uppercase' }}>
+                                  {msg.documentType || 'FILE'}
+                                </p>
+                              </div>
                             </div>
-                            <div style={{ minWidth: 0, flex: 1 }}>
-                              <p style={{ fontSize: 13, fontWeight: 700, margin: 0, color: 'var(--foreground)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={msg.documentName}>
-                                {msg.documentName}
-                              </p>
-                              <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--muted-foreground)', margin: 0, marginTop: 2, textTransform: 'uppercase' }}>
-                                {msg.documentType || 'FILE'}
-                              </p>
-                            </div>
-                          </div>
-                        )}
-                        {msg.content && (
-                          <p style={{ fontSize: '0.9em', color: 'var(--foreground)', margin: 0, lineHeight: 1.75, whiteSpace: 'pre-wrap', opacity: 0.92 }}>{msg.content}</p>
-                        )}
-                      </div>
-                    )}
+                          )}
+                          {msg.content && (
+                            <p style={{ fontSize: '0.9em', color: 'var(--foreground)', margin: 0, lineHeight: 1.75, whiteSpace: 'pre-wrap', opacity: 0.92 }}>{msg.content}</p>
+                          )}
+                        </div>
+                      )}
 
-                    {/* Sources */}
-                    {isAi && msg.sources && msg.sources.length > 0 && (
-                      <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {msg.sources.map((src, si) => (
-                          <span key={si} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 9999, background: 'rgba(124,106,247,0.08)', border: '1px solid rgba(124,106,247,0.18)', color: '#a78bfa', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-                            📄 {src}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                      {/* Sources */}
+                      {isAi && msg.sources && msg.sources.length > 0 && (
+                        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {msg.sources.map((src, si) => (
+                            <span key={si} style={{ fontSize: 11, padding: '3px 10px', borderRadius: 9999, background: 'rgba(124,106,247,0.08)', border: '1px solid rgba(124,106,247,0.18)', color: '#a78bfa', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                              📄 {src}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
 
                     {/* Action row for AI */}
                     {isAi && msg.content && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 10, paddingTop: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 6, flexWrap: 'wrap' }}>
                         <button style={iconBtn(copiedId === msg.id)} onClick={() => handleCopy(msg.id, msg.content)}
                           onMouseEnter={e => (e.currentTarget.style.color = 'var(--foreground)')}
                           onMouseLeave={e => (e.currentTarget.style.color = copiedId === msg.id ? '#a78bfa' : 'var(--muted-foreground)')}>
@@ -455,14 +1003,26 @@ export default function ChatInterface() {
                           onMouseLeave={e => (e.currentTarget.style.color = msg.feedback === 'thumbs_down' ? '#a78bfa' : 'var(--muted-foreground)')}>
                           <ThumbsDown size={13} />
                         </button>
+                        
+                        {/* Audio TTS Speak button */}
+                        <button style={iconBtn(currentlySpeakingId === msg.id)} onClick={() => handleSpeakResponse(msg.id, msg.content)}
+                          onMouseEnter={e => (e.currentTarget.style.color = currentlySpeakingId === msg.id ? '#ef4444' : 'var(--foreground)')}
+                          onMouseLeave={e => (e.currentTarget.style.color = currentlySpeakingId === msg.id ? '#a78bfa' : 'var(--muted-foreground)')}>
+                          {currentlySpeakingId === msg.id ? (
+                            <><VolumeX size={13} className="speak-pulse" /> Stop Listening</>
+                          ) : (
+                            <><Volume2 size={13} /> Listen</>
+                          )}
+                        </button>
                       </div>
                     )}
 
                     {/* Follow-ups */}
                     {isAi && msg.content && idx === messages.length - 1 && !isLoadingResponse && (
-                      <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                      <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 7 }}>
                         {getFollowUps(msg.content).map((q, qi) => (
                           <button key={qi} onClick={() => handleSend(q)}
+                            className="followup-btn"
                             style={{ fontSize: 12, padding: '6px 14px', borderRadius: 9999, background: 'rgba(124,106,247,0.07)', border: '1px solid rgba(124,106,247,0.18)', color: '#a78bfa', cursor: 'pointer', transition: 'all 0.2s', fontWeight: 500 }}
                             onMouseEnter={e => { e.currentTarget.style.background = 'rgba(124,106,247,0.16)'; e.currentTarget.style.borderColor = 'rgba(124,106,247,0.4)'; }}
                             onMouseLeave={e => { e.currentTarget.style.background = 'rgba(124,106,247,0.07)'; e.currentTarget.style.borderColor = 'rgba(124,106,247,0.18)'; }}>
@@ -472,10 +1032,18 @@ export default function ChatInterface() {
                       </div>
                     )}
                   </div>
+
+                  {/* Avatar (User on Right) */}
+                  {!isAi && (
+                    <div className="msg-avatar" style={{ flexShrink: 0, marginTop: 2 }}>
+                      <div style={{ width: 30, height: 30, borderRadius: 10, background: 'var(--secondary)', border: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: 'var(--foreground)' }}>
+                        {useStore.getState().user?.name?.charAt(0)?.toUpperCase() || 'U'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
-            <div ref={messagesEndRef} />
           </div>
         )}
       </div>
@@ -506,11 +1074,10 @@ export default function ChatInterface() {
             display: 'flex', 
             flexDirection: 'column', 
             gap: 10, 
-            transition: 'border-color 0.2s, box-shadow 0.2s', 
             boxShadow: '0 4px 24px rgba(0,0,0,0.15)' 
           }}
-            onFocusCapture={e => { const el = e.currentTarget; el.style.borderColor = 'rgba(124,106,247,0.4)'; el.style.boxShadow = '0 0 0 3px rgba(124,106,247,0.08), 0 4px 24px rgba(0,0,0,0.15)'; }}
-            onBlurCapture={e => { const el = e.currentTarget; el.style.borderColor = 'var(--border)'; el.style.boxShadow = '0 4px 24px rgba(0,0,0,0.15)'; }}>
+            onFocusCapture={handleInputFocus}
+            onBlurCapture={handleInputBlur}>
 
             {/* File upload preview card (top) */}
             {pendingFile && (
@@ -587,13 +1154,13 @@ export default function ChatInterface() {
                 accept=".pdf,.docx,.txt,.png,.jpg,.jpeg"
                 style={{ display: 'none' }}
                 onChange={handleFileUpload}
-                disabled={isUploading || !activeChatId}
+                disabled={isUploading}
               />
 
               {/* Upload attachment button */}
               <button
                 type="button"
-                disabled={!activeChatId || isUploading}
+                disabled={isUploading}
                 onClick={() => fileInputRef.current?.click()}
                 style={{
                   width: 32,
@@ -616,21 +1183,133 @@ export default function ChatInterface() {
                 {isUploading ? <Loader2 size={16} style={{ animation: 'spin 1s linear infinite', color: '#a78bfa' }} /> : <Paperclip size={16} />}
               </button>
 
-              <textarea
-                ref={inputRef}
-                rows={1}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (activeChatId) handleSend(input); } }}
-                placeholder={activeChatId ? 'Ask a legal question…' : 'Select or create a query session first…'}
-                disabled={!activeChatId || isLoadingResponse}
-                style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.9em', color: 'var(--foreground)', lineHeight: 1.6, maxHeight: 200, fontFamily: 'var(--font-sans)', padding: 0, paddingBottom: 6 }}
-              />
+              {/* Voice input button */}
+              <button
+                type="button"
+                disabled={isTranscribing}
+                onClick={isRecording ? stopRecording : startRecording}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  border: 'none',
+                  background: isRecording ? '#ef4444' : 'transparent',
+                  color: isRecording ? '#ffffff' : 'var(--muted-foreground)',
+                  transition: 'all 0.2s',
+                  marginBottom: 1,
+                }}
+                onMouseEnter={e => { 
+                  if (!isRecording) {
+                    e.currentTarget.style.background = 'var(--secondary)'; 
+                    e.currentTarget.style.color = 'var(--foreground)'; 
+                  }
+                }}
+                onMouseLeave={e => { 
+                  if (!isRecording) {
+                    e.currentTarget.style.background = 'transparent'; 
+                    e.currentTarget.style.color = 'var(--muted-foreground)'; 
+                  }
+                }}
+                title={isRecording ? "Stop recording" : "Record voice query"}>
+                {isTranscribing ? (
+                  <Loader2 size={16} style={{ animation: 'spin 1s linear infinite', color: '#a78bfa' }} />
+                ) : isRecording ? (
+                  <Square size={14} style={{ fill: '#ffffff' }} />
+                ) : (
+                  <Mic size={16} />
+                )}
+              </button>
+
+              {/* Voice output (read aloud) toggle button */}
+              <button
+                type="button"
+                onClick={toggleVoiceOutput}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  flexShrink: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  border: 'none',
+                  background: isVoiceOutputEnabled ? 'rgba(124,106,247,0.12)' : 'transparent',
+                  color: isVoiceOutputEnabled ? '#a78bfa' : 'var(--muted-foreground)',
+                  transition: 'all 0.2s',
+                  marginBottom: 1,
+                  boxShadow: isVoiceOutputEnabled ? '0 0 10px rgba(124,106,247,0.15)' : 'none',
+                }}
+                onMouseEnter={e => { 
+                  if (!isVoiceOutputEnabled) {
+                    e.currentTarget.style.background = 'var(--secondary)'; 
+                    e.currentTarget.style.color = 'var(--foreground)'; 
+                  } else {
+                    e.currentTarget.style.background = 'rgba(124,106,247,0.2)'; 
+                  }
+                }}
+                onMouseLeave={e => { 
+                  if (!isVoiceOutputEnabled) {
+                    e.currentTarget.style.background = 'transparent'; 
+                    e.currentTarget.style.color = 'var(--muted-foreground)'; 
+                  } else {
+                    e.currentTarget.style.background = 'rgba(124,106,247,0.12)'; 
+                  }
+                }}
+                title={isVoiceOutputEnabled ? "Mute voice responses" : "Read responses aloud"}>
+                {isVoiceOutputEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+              </button>
+
+              {isRecording ? (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, paddingBottom: 6, height: 32 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ef4444', display: 'inline-block', animation: 'pulse-red 1.5s infinite' }} />
+                    Recording audio...
+                  </span>
+                  
+                  {/* Wave Visualizer bars */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 3, height: 24 }}>
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                    <div className="voice-wave-bar" />
+                  </div>
+
+                  <button 
+                    type="button" 
+                    onClick={cancelRecording}
+                    style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.06)', border: '1px solid var(--border)', borderRadius: 8, padding: '4px 10px', fontSize: 11, color: 'var(--muted-foreground)', cursor: 'pointer', transition: 'all 0.2s' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'var(--foreground)'; e.currentTarget.style.background = 'rgba(255,255,255,0.12)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'var(--muted-foreground)'; e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <textarea
+                  ref={inputRef}
+                  rows={1}
+                  value={isTranscribing ? "Transcribing voice to text..." : input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(input); } }}
+                  placeholder="Ask a legal question…"
+                  disabled={isLoadingResponse || isTranscribing}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.9em', color: 'var(--foreground)', lineHeight: 1.6, maxHeight: 200, fontFamily: 'var(--font-sans)', padding: 0, paddingBottom: 6 }}
+                />
+              )}
 
               {/* Send / Stop button */}
               <button
                 type="submit"
-                disabled={!activeChatId || (!input.trim() && !pendingFile && !isLoadingResponse)}
+                disabled={(!input.trim() && !pendingFile && !isLoadingResponse) || isTranscribing}
                 style={{
                   width: 32,
                   height: 32,
@@ -665,6 +1344,26 @@ export default function ChatInterface() {
       <style>{`
         @keyframes dotBounce { 0%,80%,100% { transform:translateY(0);opacity:0.4; } 40% { transform:translateY(-6px);opacity:1; } }
         @keyframes pulse-green { 0%,100% { opacity:1; } 50% { opacity:0.5; } }
+        @keyframes pulse-red { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+        @keyframes wave-pulse { 0%, 100% { transform: scaleY(0.3); } 50% { transform: scaleY(1.3); } }
+        @keyframes speak-active { 0%, 100% { opacity: 0.7; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.06); color: #ef4444; } }
+        .voice-wave-bar {
+          width: 3px;
+          height: 16px;
+          background-color: #a78bfa;
+          border-radius: 9999px;
+          animation: wave-pulse 0.8s ease-in-out infinite;
+        }
+        .voice-wave-bar:nth-child(1) { animation-delay: 0.1s; height: 10px; }
+        .voice-wave-bar:nth-child(2) { animation-delay: 0.3s; height: 14px; }
+        .voice-wave-bar:nth-child(3) { animation-delay: 0.5s; height: 18px; }
+        .voice-wave-bar:nth-child(4) { animation-delay: 0.2s; height: 12px; }
+        .voice-wave-bar:nth-child(5) { animation-delay: 0.4s; height: 16px; }
+        .voice-wave-bar:nth-child(6) { animation-delay: 0.1s; height: 11px; }
+        .voice-wave-bar:nth-child(7) { animation-delay: 0.3s; height: 7px; }
+        .speak-pulse {
+          animation: speak-active 1.2s infinite ease-in-out;
+        }
       `}</style>
     </div>
   );

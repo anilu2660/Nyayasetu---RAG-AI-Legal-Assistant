@@ -12,7 +12,7 @@ import {
   Sparkles, ShieldCheck, Languages, ArrowRight, FileText,
   CheckCircle2, Lock, Mail, Landmark, Scale, BookOpen, Zap,
   Globe, Star, ChevronRight, Menu, Bot, MessageSquare, Upload,
-  Clock, Loader2, X, User, Quote, LayoutDashboard,
+  Clock, Loader2, X, User, Quote, LayoutDashboard, Info,
 } from 'lucide-react';
 
 gsap.registerPlugin(ScrollTrigger);
@@ -97,6 +97,33 @@ export default function LandingPage() {
   const [authLoading, setAuthLoading] = useState(false);
   const [chatIdx,     setChatIdx]     = useState(0);
   const [navScrolled, setNavScrolled] = useState(false);
+  const [trialExpired, setTrialExpired] = useState(false);
+
+  /* Check query parameters for expired guest session */
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('trialExpired') === 'true') {
+        setTrialExpired(true);
+        setAuthMode('register');
+        setAuthOpen(true);
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }
+    }
+  }, []);
+
+  const startTrial = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('nyayasetu_guest_trial_start', Date.now().toString());
+      setUser({
+        id: 'guest-session',
+        email: 'guest@nyayasetu.org',
+        name: 'Guest Citizen'
+      });
+      router.push('/dashboard');
+    }
+  };
 
   /* Apply theme to html element on mount */
   useEffect(() => {
@@ -199,6 +226,68 @@ export default function LandingPage() {
         { opacity: 1, scale: 1, duration: 0.7, ease: 'back.out(1.4)',
           scrollTrigger: { trigger: '.cta-card', start: 'top 85%' } }
       );
+
+      /* Laws ticker infinite scrolling */
+      const ticker = document.querySelector('.ticker-inner');
+      if (ticker) {
+        gsap.to(ticker, {
+          xPercent: -50,
+          ease: 'none',
+          duration: 25,
+          repeat: -1
+        });
+      }
+
+      /* 3D tilt hover + spotlight cursor movement */
+      const cards = document.querySelectorAll('.feature-card');
+      cards.forEach(card => {
+        const htmlCard = card as HTMLElement;
+
+        const handleMouseMove = (e: Event) => {
+          const mouseEvent = e as MouseEvent;
+          const rect = htmlCard.getBoundingClientRect();
+          const x = mouseEvent.clientX - rect.left;
+          const y = mouseEvent.clientY - rect.top;
+          
+          htmlCard.style.setProperty('--x', `${x}px`);
+          htmlCard.style.setProperty('--y', `${y}px`);
+          
+          const xc = rect.width / 2;
+          const yc = rect.height / 2;
+          
+          const rotateY = ((x - xc) / xc) * 8; // max 8 deg
+          const rotateX = -((y - yc) / yc) * 8; // max 8 deg
+          
+          const isDark = document.documentElement.classList.contains('dark');
+          
+          gsap.to(htmlCard, {
+            rotateX: rotateX,
+            rotateY: rotateY,
+            scale: 1.025,
+            boxShadow: isDark
+              ? '0 16px 40px rgba(0,0,0,0.35), 0 0 0 1px rgba(124,106,247,0.25)'
+              : '0 16px 40px rgba(0,0,0,0.08), 0 0 0 1px rgba(124,106,247,0.12)',
+            duration: 0.3,
+            ease: 'power2.out',
+            overwrite: 'auto'
+          });
+        };
+
+        const handleMouseLeave = () => {
+          gsap.to(htmlCard, {
+            rotateX: 0,
+            rotateY: 0,
+            scale: 1,
+            boxShadow: 'none',
+            duration: 0.35,
+            ease: 'power2.out',
+            overwrite: 'auto'
+          });
+        };
+
+        htmlCard.addEventListener('mousemove', handleMouseMove);
+        htmlCard.addEventListener('mouseleave', handleMouseLeave);
+      });
 
     }, mainRef);
 
@@ -315,6 +404,25 @@ export default function LandingPage() {
               </Button>
             ) : (
               <>
+                <button onClick={startTrial} className="btn-glow"
+                  style={{
+                    fontSize: 13, fontWeight: 600, color: '#fff',
+                    background: 'linear-gradient(135deg, #7c6af7, #5b50d1)',
+                    padding: '7px 16px', borderRadius: 10, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 6, border: 'none',
+                    boxShadow: '0 4px 14px rgba(124,106,247,0.3)',
+                    transition: 'all 0.2s'
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                    e.currentTarget.style.boxShadow = '0 6px 20px rgba(124,106,247,0.4)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.transform = 'translateY(0)';
+                    e.currentTarget.style.boxShadow = '0 4px 14px rgba(124,106,247,0.3)';
+                  }}>
+                  Try NyayaSetu
+                </button>
                 <button onClick={() => openAuth('login')} style={{ fontSize: 13, fontWeight: 500, color: 'var(--muted-foreground)', background: 'none', border: 'none', cursor: 'pointer', padding: '6px 14px', borderRadius: 8, transition: 'color 0.2s' }}
                   onMouseEnter={e => (e.currentTarget.style.color = 'var(--foreground)')}
                   onMouseLeave={e => (e.currentTarget.style.color = 'var(--muted-foreground)')}>
@@ -351,6 +459,7 @@ export default function LandingPage() {
               <span style={{ fontSize: 18 }}>{theme === 'dark' ? '☀️' : '🌙'}</span>
               Switch to {theme === 'dark' ? 'Light' : 'Dark'} Mode
             </button>
+            <button onClick={() => { startTrial(); setMobileOpen(false); }} className="btn-glow" style={{ fontSize: 15, fontWeight: 600, color: '#fff', padding: '12px 20px', borderRadius: 12, cursor: 'pointer', background: 'linear-gradient(135deg, #7c6af7, #5b50d1)', border: 'none' }}>Try NyayaSetu</button>
             <button onClick={() => { openAuth('login'); setMobileOpen(false); }} className="btn-outline-glow" style={{ fontSize: 15, fontWeight: 600, padding: '12px 20px', borderRadius: 12, cursor: 'pointer' }}>Sign In</button>
             <button onClick={() => { openAuth('register'); setMobileOpen(false); }} className="btn-glow" style={{ fontSize: 15, fontWeight: 600, color: '#fff', padding: '12px 20px', borderRadius: 12, cursor: 'pointer' }}>Get Started</button>
           </div>
@@ -524,7 +633,7 @@ export default function LandingPage() {
           </p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
+        <div className="perspective-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
           {FEATURES.map((f, i) => (
             <div key={i} className="feature-card feature-card-item" style={{ padding: 28 }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: f.bg, border: `1px solid ${f.color}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18 }}>
@@ -554,7 +663,7 @@ export default function LandingPage() {
             </p>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 20 }}>
+          <div className="perspective-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 20 }}>
             {STEPS.map((s, i) => (
               <div key={i} className="step-item feature-card" style={{ padding: 28, position: 'relative', overflow: 'visible' }}>
                 <div style={{ position: 'absolute', top: 18, right: 18, fontSize: 40, fontWeight: 900, color: 'rgba(124,106,247,0.07)', fontFamily: 'var(--font-mono)', lineHeight: 1, userSelect: 'none' }}>
@@ -587,7 +696,7 @@ export default function LandingPage() {
           </p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 16 }}>
+        <div className="perspective-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 16 }}>
           {BENEFITS.map((b, i) => (
             <div key={i} className={`feature-card ${i % 2 === 0 ? 'gsap-slide-left' : 'gsap-slide-right'}`}
               style={{ padding: 24, display: 'flex', gap: 18, alignItems: 'flex-start' }}>
@@ -725,6 +834,13 @@ export default function LandingPage() {
 
             {/* Form */}
             <form onSubmit={handleAuth} style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {trialExpired && (
+                <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(240,165,0,0.08)', border: '1px solid rgba(240,165,0,0.18)', color: '#f0a500', fontSize: 12, fontWeight: 600, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Info size={14} style={{ flexShrink: 0 }} />
+                  <span>Your 10-minute trial has expired! Register or sign in to save your progress and continue.</span>
+                </div>
+              )}
+
               {authError && (
                 <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(255,77,79,0.1)', border: '1px solid rgba(255,77,79,0.2)', color: '#ff4d4f', fontSize: 12, fontWeight: 500 }}>
                   {authError}

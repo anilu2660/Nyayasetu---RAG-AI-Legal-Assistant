@@ -235,8 +235,29 @@ async function searchRAG(query, userId, options = {}) {
     }
     const maxResults = options.maxResults || 4;
     const results = [];
-    // Query words filtering (only keep words longer than 3 characters)
-    const queryWords = normalizedQuery.split(/\s+/).filter(w => w.length > 3);
+    // Expand legal abbreviations to matching full forms for synonym retrieval
+    let expandedQuery = normalizedQuery;
+    const abbreviations = {
+        'bns': 'bharatiya nyaya sanhita',
+        'ipc': 'indian penal code',
+        'crpc': 'code of criminal procedure',
+        'bnss': 'bharatiya nagarik suraksha sanhita',
+        'bsa': 'bharatiya sakshya adhiniyam',
+        'fir': 'first information report',
+        'nalsa': 'national legal services authority',
+        'dlsa': 'district legal services authority'
+    };
+    for (const [abbr, expansion] of Object.entries(abbreviations)) {
+        const regex = new RegExp(`\\b${abbr}\\b`, 'g');
+        if (regex.test(normalizedQuery)) {
+            expandedQuery += ' ' + expansion;
+        }
+    }
+    // Tokenize and filter query words
+    const stopWords3 = ['the', 'and', 'for', 'are', 'but', 'not', 'you', 'was', 'out', 'him', 'her', 'his', 'its', 'our', 'she', 'who', 'how', 'why', 'can', 'any', 'has', 'had', 'did', 'get', 'use', 'one', 'two', 'new'];
+    const queryWords = expandedQuery.split(/\s+/)
+        .map(w => w.replace(/[^\w]/g, ''))
+        .filter(w => w.length >= 3 && !stopWords3.includes(w));
     if (queryWords.length === 0) {
         return [];
     }
